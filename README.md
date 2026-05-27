@@ -1,9 +1,9 @@
 # LLM4SVA
 
 Code accompanying *Reward-Weighted On-Policy Distillation with an Open
-Property-Equivalence Verifier for NL-to-SVA Generation* (anonymous
-double-blind submission). Section numbers below refer to the paper PDF
-distributed alongside this anonymized release.
+Property-Equivalence Verifier for NL-to-SVA Generation*. The paper LaTeX
+sources live at the sibling repository `../NeurIPS-LLM4SVA/`; section
+numbers below refer to that manuscript.
 
 The repository implements every component of the paper pipeline: the
 Temporal Complexity Level (TCL) classifier (§3), the stratified curriculum
@@ -47,14 +47,11 @@ Vector source: [`figs/overview.pdf`](figs/overview.pdf).*
 | Stratified curriculum SFT, TT-CE with α=3, 50% replay (§4.2, App. D) | `training/curriculum_sft/run_curriculum_sft_v2.py`, `src/temporal_loss.py` |
 | Reasoning-augmented SFT seed used by OPD (§5 Setup) | `training/curriculum_sft/run_sft_with_reasoning.py` |
 | OPD forward-KL on student rollouts, V_min vocab alignment (§4.1, App. B) | `training/rwopd/run_opd_codev_to_qwen.py` |
-| RWOPD wrapper (PEC filter + reward weighting, paper Eq. 2–3) | `training/rwopd/run_opd_codev_to_qwen.py` (use `--k-rollouts 4 --enable-pec-filter`) |
+| RWOPD wrapper (PEC filter + reward weighting, paper Eq. 2–3) | **not yet committed** — see "RWOPD vs OPD gap" below |
 | Open PEC oracle, 5-verdict matrix, 4-pass lowering (§4.3, App. E) | `src/pec_yosys.py`, `src/sva_lowering.py`, `src/formal_verify.py`, `src/vacuity.py` |
 | Verifier-equivalence reward for RLVF (§4.4, Eq. 4) | `training/rlvf/run_grpo_pilot.py::compute_reward_pec` |
 | GRPO / IPO sweep configurations (App. F, Table 4) | `training/rlvf/run_grpo_pilot.py`, `training/rlvf/run_ipo_pilot.py`, `training/rlvf/*.sh` |
 | Compile gate, R1–R17 normalization, clock-aware wrapper (App. G) | `data_pipeline/normalize_sva_for_verilator.py`, `compile_gate/vcs_compile_check.py`, `compile_gate/vcs_dynamic_check.py`, `compile_gate/vcs_shim.c` |
-| 5-key train/test overlap audit (App. G Table 7) | `data_pipeline/overlap_audit.py` |
-| TCL 90-SVA hand-labeled corpus validation (App. C) | `tests/test_tcl_corpus.py` (skips if corpus not provided) |
-| JasperGold rescoring via Cadence docker (§5 headline pass@k) | `eval/rescore_funcatk_with_cadence_pec.py` (no open-PEC fallback) |
 | Master-pool assembly (39,914 rows) | `data_pipeline/build_master_train.py`, `data_pipeline/scrape_*.py`, `data_pipeline/backfill_master_rtl.py` |
 | NL backfill with GPT-5 (App. G) | `data_pipeline/regenerate_nl_with_gpt5.py`, `data_pipeline/fill_nl_with_*.py` |
 | JasperGold and open-PEC rescoring (§5, §5.4 Oracle Agreement) | `eval/run_funcatk_eval.py`, `eval/rescore_funcatk_with_cadence_pec.py`, `eval/rescore_syntax_with_vcs.py`, `eval/summarize_pec_evals.py` |
@@ -78,8 +75,8 @@ _self_test; _self_test()'`.
 ### Curriculum SFT + TT-CE (§4.2, App. D)
 
 `training/curriculum_sft/run_curriculum_sft_v2.py` drives the 3-stage
-curriculum (C1 → C2 → C3) with paper App. D per-stage schedule baked in
-as defaults:
+curriculum (C1 → C2 → C3). The paper App. D specifies per-stage
+hyperparameters:
 
 | Stage | Pool | Epochs | LR | Replay | Val. gate |
 | --- | --- | --- | --- | --- | --- |
@@ -87,17 +84,13 @@ as defaults:
 | 2 | C2 + replay | 5 | 1e-5 | 50% | C2 acc ≥ 0.65 |
 | 3 | C3 + replay | 6 | 8e-6 | 50% | C3 acc ≥ 0.50 |
 
-Each stage's epoch count, learning rate, replay ratio, and Func@1 val
-gate are read from comma-separated lists on `--stage-epochs`,
-`--stage-lr`, `--stage-replay`, and `--stage-val-gate`. Defaults match
-the table above; once a stage's eval Func@1 meets the gate the script
-moves on (paper §4.2). Setting any list to a 3-tuple of zeros disables
-that knob — e.g. `--stage-val-gate 0,0,0` falls back to patience-based
-early stop only.
-
-The reasoning-augmented SFT (`run_sft_with_reasoning.py`) shares the
-same temporal-token-weighted CE loss (`temporal_weighted_loss`) so the
-two seeds train under identical operator-aware gradient signal.
+The script as committed exposes a single `--epochs-per-stage` and a
+single `--lr` applied uniformly across the three stages (defaults: 3
+epochs, 2e-5), plus `--replay-ratio` (default 0.5). The paper's per-stage
+schedule is reproducible by chaining three invocations with
+`--start-stage C2` / `--start-stage C3` and the matching `--lr` /
+`--epochs-per-stage`, but the script does not enforce the per-stage
+decay or the validation gates automatically.
 
 Temporal-token-weighted CE (`src/temporal_loss.py`) reweights label tokens
 whose decoded string contains any of `TEMPORAL_OPS = {##, [*, [=, |->,
@@ -130,46 +123,54 @@ implication, `&&` commutativity).
 
 ### OPD / RWOPD (§4.1, App. B)
 
-`training/rwopd/run_opd_codev_to_qwen.py` implements both paper variants:
+`training/rwopd/run_opd_codev_to_qwen.py` implements **plain OPD** —
+forward-KL from the frozen CodeV-SVA-14B teacher onto the Qwen2.5-Coder-7B
+student LoRA on every student rollout. Already matches App. B: V_min
+vocab truncation (151,643), response-token-only KL, sampling at T=1.0
+top_p=0.95, LoRA-only gradients, AdamW with cosine schedule and 5%
+warmup, grad-clip 1.0. Produces the "OPD from CodeV-SVA-14B" row of
+Table 1.
 
-- **Plain OPD** (Table 1 "OPD from CodeV-SVA-14B" row): default —
-  `--k-rollouts 1` with the PEC filter off. Forward-KL from the frozen
-  CodeV-SVA-14B teacher onto the Qwen2.5-Coder-7B student LoRA on every
-  student rollout.
-- **RWOPD** (Table 1 headline "+ RWOPD from CodeV-SVA-14B" row): add
-  `--k-rollouts 4 --enable-pec-filter --filter-mode implies`. Per paper
-  Eq. 2–3:
-  1. sample K rollouts per prompt;
-  2. score each via `src.pec_yosys.prop_equivalence` against the prompt's
-     reference SVA in its RTL context;
-  3. weight verdicts `EQUIVALENT → 1.0`, `IMPLIES_REF_TO_LM → 0.6`,
-     `IMPLIES_LM_TO_REF → 0.4`, else drop the rollout;
-  4. if every rollout fails, skip the prompt (zero gradient that step);
-  5. average the surviving losses as `Σ w_i · L_OPD(y_i) / Σ w_i`.
-- **Strict RWOPD** (Fig. 3 middle/right ablation): same as RWOPD but with
-  `--filter-mode strict` so only EQUIVALENT rollouts contribute.
+**RWOPD vs OPD gap.** The headline "+ RWOPD from CodeV-SVA-14B" row of
+Table 1 requires five additional steps that are *not yet committed*:
 
-Both branches share the App. B specifics: V_MIN=151,643 vocab truncation
-(hard-coded as the asserted `V_MIN` constant), response-token-only KL,
-sampling at T=1.0 / top_p=0.95, LoRA-only gradients, AdamW with cosine
-schedule and 5% warmup, grad-clip 1.0.
+1. Sample K rollouts per prompt (default K=4, ablated to {1, 2, 4, 8}).
+2. Call `src.pec_yosys.prop_equivalence` on each rollout vs. the canonical
+   reference in the prompt's RTL context.
+3. Map the verdict to a weight via paper Eq. 2:
+   `EQUIVALENT → 1.0`, `IMPLIES_REF_TO_LM → 0.6`,
+   `IMPLIES_LM_TO_REF → 0.4`, else drop the rollout.
+4. If every rollout fails, skip the prompt (Eq. 3 — zero gradient that
+   step).
+5. Replace the single-rollout loss with the weighted average over the
+   surviving rollouts.
+
+The PEC oracle, the verdict enum, and the constants already live in
+`src/pec_yosys.py` and `training/rlvf/run_grpo_pilot.py::compute_reward_pec`.
+This is the P0 follow-up listed in
+`../NeurIPS-LLM4SVA/EXPERIMENT_FOLLOWUP_RUNBOOK.md`.
 
 ### RLVF baselines (§4.4, App. F)
 
-`training/rlvf/run_grpo_pilot.py` is the full GRPO driver.
-`compute_reward_pec` implements paper Eq. 4 verbatim:
+`training/rlvf/run_grpo_pilot.py` is the full GRPO driver. The active
+reward (`compute_reward_pec` v6 at line 282) is:
 
 ```
-EQUIVALENT              → 1.00
-IMPLIES_REF_TO_LM       → 0.60   (LM strictly stricter than ref)
-IMPLIES_LM_TO_REF       → 0.40   (LM strictly more permissive)
-UNSUPPORTED + syntax_ok → 0.15   (liveness / deep-BMC timeout floor)
-otherwise               → 0.00
+EQUIVALENT             → 1.0
+IMPLIES_REF_TO_LM      → 0.5    (symmetric)
+IMPLIES_LM_TO_REF      → 0.5    (symmetric)
+otherwise              → 0.0
 ```
 
-`PARSE_ERROR / TIMEOUT / EXTRACT_ERROR / UNKNOWN` are collapsed onto
-the paper-facing `UNSUPPORTED` verdict by `src/pec_yosys.py:public_verdict`
-so reward bookkeeping only sees the five paper verdicts.
+**Note on paper Eq. 4.** The paper writes the reward as 1.0 / 0.6 / 0.4 /
+0.15-on-UNSUPPORTED / 0.0. Earlier reward versions (v3/v4) used those
+asymmetric IMPLIES weights, but v6 collapses both IMPLIES directions to
+0.5 and removes the UNSUPPORTED floor — inline comments at lines 230–250
+of `run_grpo_pilot.py` explain that the asymmetric shape caused
+IMPLIES-collapse and the floor degraded reward variance after Cadence
+canonicalization made UNSUPPORTED rare. The v3/v4 scheme is still
+selectable via the older code paths in the same file, but is not the
+default. This is the active reward in every GRPO Pilot-2..6 result.
 
 The seven GRPO pilots in App. F Table 4 are driven by the
 `run_phase*_chain.sh` / `run_rtl_aware_chain.sh` orchestrators.
@@ -196,21 +197,11 @@ L-2016.06 binary stops segfaulting on modern glibc.
 generated tokens, the FVEval system + user prompt template, writes JSON
 under `results/`. Post-process with:
 
-- `eval/rescore_funcatk_with_cadence_pec.py` — **Cadence JasperGold**
-  rescoring for the headline pass@k in Table 1. The script invokes a
-  Docker image containing a licensed JG install via
-  `--jg-docker-image cadence-jg:latest --jg-helper-script /work/jg_prop_eq.sh`
-  (or via the env vars `JG_DOCKER_IMAGE` / `JG_HELPER_SCRIPT`). It exits
-  with code 2 if `docker` or the image is missing — there is **no
-  silent fallback to the open PEC**. For an open-PEC diagnostic use
-  `run_eval_with_pec.py` below. See `eval/jg_helper_README.md` for the
-  expected helper-script contract.
+- `eval/rescore_funcatk_with_cadence_pec.py` — JasperGold rescoring for
+  the headline pass@k in Table 1 (requires a Cadence license).
 - `eval/rescore_syntax_with_vcs.py` — VCS rescoring for compile@1.
 - `eval/run_eval_with_pec.py` — open-PEC rescoring for the "PEC strict /
-  PEC Relax" diagnostic in Fig. 3. Liveness defaults to UNSUPPORTED
-  (`--liveness-bound 0`) so the open PEC remains a sound filter; any
-  positive value trades soundness for coverage and is intended only for
-  the ablation in App. E.
+  PEC Relax" diagnostic in Fig. 3.
 - `eval/summarize_pec_evals.py` — collapse a directory of `*.rescored_*.json`
   files into the row table used in §5.
 
@@ -220,18 +211,7 @@ long GRPO/OPD runs).
 
 ## Install
 
-Set the site-specific paths first (every entry point reads them through
-shell expansion, so the code itself is free of hard-coded paths):
-
 ```bash
-export OSS_CAD_SUITE=/path/to/oss-cad-suite      # bin/yosys, bin/sby, bin/z3
-export TEACHER_MODEL=/path/to/CodeV-SVA-14B
-export STUDENT_MODEL=/path/to/Qwen2.5-Coder-7B-Instruct
-export OPENAI_API_KEY=...                        # NL-backfill scripts only
-# Cadence JG docker — only needed for the headline pass@k rescore:
-export JG_DOCKER_IMAGE=cadence-jg:latest
-export JG_HELPER_SCRIPT=/work/jg_prop_eq.sh
-
 bash setup.sh
 ```
 
@@ -267,22 +247,15 @@ RWOPD checkpoint takes under 20 minutes once the SFT seed is in place
    `training/curriculum_sft/run_curriculum_sft_v2.py --replay-fraction 0.5
    --alpha 3.0 --eval-each-stage`.
 5. **OPD distillation** — `training/rwopd/run_opd_codev_to_qwen.py`
-   (default flags = plain OPD; add `--k-rollouts 4 --enable-pec-filter
-   --filter-mode implies` for RWOPD, `--filter-mode strict` for Strict
-   RWOPD).
+   (single-rollout OPD; the RWOPD wrapper still needs to be committed,
+   see "RWOPD vs OPD gap" above).
 6. **(Optional) RLVF baselines** — `training/rlvf/run_grpo_pilot.py`,
    `training/rlvf/run_ipo_pilot.py` plus the `run_phase*_chain.sh`
    orchestrators.
 7. **Evaluation** — `eval/run_funcatk_eval.py` to generate NL2SVA
    outputs; `eval/rescore_funcatk_with_cadence_pec.py` for JasperGold
-   pass@k (requires the Cadence JG docker image — no open-PEC fallback);
-   `eval/run_eval_with_pec.py` for the open-PEC diagnostic;
+   pass@k; `eval/run_eval_with_pec.py` for the open-PEC diagnostic;
    `eval/summarize_pec_evals.py` to tabulate.
-8. **Train/test overlap audit** (App. G Table 7) —
-   `data_pipeline/overlap_audit.py --train <train.jsonl> --output
-   results/overlap_audit.json` produces the five-key audit (row hash,
-   normalized SVA body, normalized RTL body, Verilog module names, exact
-   normalized NL).
 
 ## Data
 
