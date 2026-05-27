@@ -33,15 +33,12 @@ if [ -z "$PYTHON" ]; then
 fi
 echo "Python: $($PYTHON --version)"
 
-# Check OPENAI_API_KEY
+# Check OPENAI_API_KEY (required only by NL-backfill scripts in data_pipeline/).
+# Do NOT load keys from disk: export the variable explicitly before invoking
+# this script. The repository ships no credentials and never reads any.
 if [ -z "${OPENAI_API_KEY:-}" ]; then
-    if [ -f ~/.openai_key ]; then
-        export OPENAI_API_KEY="$(cat ~/.openai_key)"
-        echo "Loaded OPENAI_API_KEY from ~/.openai_key"
-    else
-        echo "WARNING: OPENAI_API_KEY not set. GPT-based pilots will fail."
-        echo "  Set it with: export OPENAI_API_KEY=your_key_here"
-    fi
+    echo "WARNING: OPENAI_API_KEY not set. GPT-based NL backfill will fail."
+    echo "  Set it with: export OPENAI_API_KEY=<your key>"
 else
     echo "OPENAI_API_KEY: set (${#OPENAI_API_KEY} chars)"
 fi
