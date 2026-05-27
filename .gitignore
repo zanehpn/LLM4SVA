@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Local experiment outputs — checkpoints, eval dumps, large pools
+results/
+runs/
+logs/
+data/
+*.jsonl
+*.ckpt
+*.bin
+*.safetensors
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
